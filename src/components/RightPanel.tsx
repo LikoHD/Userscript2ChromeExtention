@@ -5,6 +5,7 @@ import {
   FileCode2,
   FolderOpen,
   Download,
+  Image as ImageIcon,
 } from 'lucide-react';
 import type {
   ConversionResult,
@@ -31,8 +32,81 @@ interface CodeEntry {
   isCode: boolean;
 }
 
+type FileViewType = 'code' | 'image';
+
+interface FileRow {
+  id: CodeFileId;
+  name: string;
+  size: number;
+  type: FileViewType;
+  content?: string;
+}
+
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i;
+
 function formatBytes(size: number) {
   return size < 1024 ? `${size} B` : `${(size / 1024).toFixed(1)} KB`;
+}
+
+function isImageFile(path: string): boolean {
+  return IMAGE_EXT_RE.test(path);
+}
+
+function createPlaceholderIconDataUrl(name: string, size: number): string | null {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  const gradient = ctx.createLinearGradient(0, 0, size, size);
+  gradient.addColorStop(0, '#2f2f2f');
+  gradient.addColorStop(1, '#5b5b5b');
+  ctx.fillStyle = gradient;
+
+  const radius = size * 0.2;
+  ctx.beginPath();
+  ctx.moveTo(radius, 0);
+  ctx.lineTo(size - radius, 0);
+  ctx.quadraticCurveTo(size, 0, size, radius);
+  ctx.lineTo(size, size - radius);
+  ctx.quadraticCurveTo(size, size, size - radius, size);
+  ctx.lineTo(radius, size);
+  ctx.quadraticCurveTo(0, size, 0, size - radius);
+  ctx.lineTo(0, radius);
+  ctx.quadraticCurveTo(0, 0, radius, 0);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${Math.floor(size * 0.52)}px -apple-system, BlinkMacSystemFont, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const letter = (name.trim()[0] || 'S').toUpperCase();
+  ctx.fillText(letter, size / 2, size / 2);
+
+  return canvas.toDataURL('image/png');
+}
+
+function guessIconSize(path: string): number {
+  const m = path.match(/icon(\d+)\.(png|svg|jpe?g|webp|ico)$/i);
+  if (!m) return 128;
+  const parsed = Number(m[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 128;
+}
+
+function imagePreviewSrc(file: FileRow, scriptName: string): string | null {
+  if (file.type !== 'image') return null;
+
+  const content = (file.content ?? '').trim();
+  if (content.startsWith('data:image/')) return content;
+
+  if (/\.svg$/i.test(file.name) && content.includes('<svg')) {
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`;
+  }
+
+  return createPlaceholderIconDataUrl(scriptName, guessIconSize(file.name));
 }
 
 function AnalysisViewer({ text }: { text: string }) {
@@ -244,26 +318,54 @@ function FilesTab({
     );
   }
 
-  const files = [
-    ...(sourceText.trim() ? [{ id: 'source', name: 'source.user.js', size: sourceText.length }] : []),
-    ...result.files.map(file => ({ id: `file:${file.path}`, name: file.path, size: file.content.length })),
+  const files: FileRow[] = [
+    ...(sourceText.trim()
+      ? [{ id: 'source', name: 'source.user.js', size: sourceText.length, type: 'code' as const, content: sourceText }]
+      : []),
+    ...result.files.map(file => ({
+      id: `file:${file.path}`,
+      name: file.path,
+      size: file.content.length,
+      type: isImageFile(file.path) ? ('image' as const) : ('code' as const),
+      content: file.content,
+    })),
   ];
 
   return (
     <div className="p-4 flex flex-col gap-1">
       <p className="text-[11px] font-medium text-stone-400 uppercase tracking-wide mb-2">Extension contents</p>
       {files.map((file, i) => (
-        <button
-          type="button"
-          key={i}
-          onClick={() => onOpenCodeFile(file.id)}
-          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-stone-50 text-left group"
-        >
-          <FileCode2 className="h-3.5 w-3.5 shrink-0 text-stone-500" />
-          <span className="text-[12px] font-mono text-stone-700 flex-1 truncate">{file.name}</span>
-          <span className="text-[10px] text-stone-400 font-mono">{formatBytes(file.size)}</span>
-          <span className="text-[10px] text-stone-400 opacity-0 group-hover:opacity-100 transition-opacity">跳转代码</span>
-        </button>
+        <div key={i} className="relative group">
+          <button
+            type="button"
+            onClick={() => onOpenCodeFile(file.id)}
+            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-stone-50 text-left"
+          >
+            {file.type === 'image' ? (
+              <ImageIcon className="h-3.5 w-3.5 shrink-0 text-pink-500" />
+            ) : (
+              <FileCode2 className="h-3.5 w-3.5 shrink-0 text-stone-500" />
+            )}
+            <span className="text-[12px] font-mono text-stone-700 flex-1 truncate">{file.name}</span>
+            <span className="text-[10px] text-stone-400 font-mono">{formatBytes(file.size)}</span>
+            <span className="text-[10px] text-stone-400 opacity-0 group-hover:opacity-100 transition-opacity">
+              跳转代码
+            </span>
+          </button>
+
+          {file.type === 'image' && imagePreviewSrc(file, result.meta.name) && (
+            <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 z-20 opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150">
+              <div className="w-28 rounded-lg border border-stone-200 bg-white shadow-lg p-2 flex flex-col items-center gap-1">
+                <img
+                  src={imagePreviewSrc(file, result.meta.name) || undefined}
+                  alt={file.name}
+                  className="max-h-16 w-auto object-contain"
+                />
+                <span className="text-[10px] text-stone-500 font-mono">hover 预览</span>
+              </div>
+            </div>
+          )}
+        </div>
       ))}
     </div>
   );
